@@ -1,0 +1,138 @@
+
+import numpy as np
+import tensorflow as tf
+
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, LSTM, Dense, Embedding
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+
+questions = [
+"hi","hello","how are you","what is your name","what are you doing",
+"are you a robot","what is machine learning","what is deep learning",
+"what is python","what is artificial intelligence","why are you created",
+"who created you","can you help me","what is your purpose",
+"are you intelligent","tell me about chatbot","what can you do",
+"are you real","good morning","bye"
+]
+
+answers = [
+"hello nice to meet you","hi how can i help you","i am fine thank you",
+"my name is lstm chatbot","i am answering your questions",
+"yes i am a virtual robot","machine learning is teaching computers from data",
+"deep learning uses neural networks","python is a programming language",
+"artificial intelligence makes machines smart",
+"i am created for answering questions","students created me",
+"yes i can help you","my purpose is to assist users",
+"i try to be intelligent","chatbot is a program that talks with users",
+"i can answer simple questions","no i am virtual",
+"good morning have a nice day","goodbye see you later"
+]
+
+answers = ["start " + a + " end" for a in answers]
+tokenizer = Tokenizer()
+tokenizer.fit_on_texts(questions + answers)
+
+vocab_size = len(tokenizer.word_index) + 1
+
+encoder_seq = tokenizer.texts_to_sequences(questions)
+decoder_seq = tokenizer.texts_to_sequences(answers)
+
+max_len = 7
+
+encoder_input = pad_sequences(encoder_seq, maxlen=max_len, padding='post')
+
+decoder_input = pad_sequences([i[:-1] for i in decoder_seq],
+                              maxlen=max_len, padding='post')
+
+decoder_output = pad_sequences([i[1:] for i in decoder_seq],
+                               maxlen=max_len, padding='post')
+
+decoder_output = tf.keras.utils.to_categorical(decoder_output, vocab_size)
+latent_dim = 128
+
+encoder_inputs = Input(shape=(max_len,))
+encoder_embedding = Embedding(vocab_size, 128)
+enc_emb = encoder_embedding(encoder_inputs)
+
+encoder_lstm = LSTM(latent_dim, return_state=True)
+_, state_h, state_c = encoder_lstm(enc_emb)
+
+encoder_states = [state_h, state_c]
+
+decoder_inputs = Input(shape=(max_len,))
+decoder_embedding = Embedding(vocab_size, 128)
+dec_emb = decoder_embedding(decoder_inputs)
+
+decoder_lstm = LSTM(latent_dim, return_sequences=True, return_state=True)
+decoder_outputs, _, _ = decoder_lstm(dec_emb, initial_state=encoder_states)
+
+decoder_dense = Dense(vocab_size, activation='softmax')
+decoder_outputs = decoder_dense(decoder_outputs)
+
+model = Model([encoder_inputs, decoder_inputs], decoder_outputs)
+
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+model.fit([encoder_input, decoder_input], decoder_output, epochs=400, verbose=0)
+encoder_model = Model(encoder_inputs, encoder_states)
+
+decoder_state_input_h = Input(shape=(latent_dim,))
+decoder_state_input_c = Input(shape=(latent_dim,))
+decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
+
+dec_emb2 = decoder_embedding(decoder_inputs)
+
+decoder_outputs2, state_h2, state_c2 = decoder_lstm(
+    dec_emb2, initial_state=decoder_states_inputs
+)
+
+decoder_states = [state_h2, state_c2]
+decoder_outputs2 = decoder_dense(decoder_outputs2)
+
+decoder_model = Model(
+    [decoder_inputs] + decoder_states_inputs,
+    [decoder_outputs2] + decoder_states
+)
+index_word = tokenizer.index_word
+word_index = tokenizer.word_index
+
+def chatbot(text):
+    seq = tokenizer.texts_to_sequences([text])
+    seq = pad_sequences(seq, maxlen=max_len, padding='post')
+
+    states = encoder_model.predict(seq, verbose=0)
+
+    target_seq = np.zeros((1, 1))
+    target_seq[0, 0] = word_index['start']
+
+    reply = ""
+
+    for _ in range(max_len):
+        output, h, c = decoder_model.predict([target_seq] + states, verbose=0)
+
+        word_id = np.argmax(output[0, -1, :])
+        word = index_word.get(word_id, '')
+
+        if word == 'end':
+            break
+
+        reply += " " + word
+
+        target_seq = np.zeros((1, 1))
+        target_seq[0, 0] = word_id
+
+        states = [h, c]
+
+    return reply.strip()
+
+test_questions = [
+    "hi",
+    "what is python",
+    "are you a robot",
+    "bye"
+]
+
+for q in test_questions:
+    print("You:", q)
+    print("Bot:", chatbot(q))
+    print()
